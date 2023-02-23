@@ -72,6 +72,100 @@ def flatten_key(key_name: str, parent_keys: list[str], separator: str = "__") ->
 
     return separator.join(inflected_key)
 
+def flatten_array_schema(
+    schema: dict,
+    max_level: int,
+    separator: str = "__",
+) -> dict:
+    new_schema = deepcopy(schema)
+    new_schema["properties"] = _flatten_array_schema(
+        schema_node=new_schema,
+        max_level=max_level,
+        separator=separator,
+    )
+    return new_schema
+
+def _flatten_array_schema(
+    schema_node: dict,
+    parent_keys: list[str] | None = None,
+    separator: str = "__",
+    level: int = 0,
+    max_level: int = 0,
+) -> dict:
+    """Flatten the provided array schema node, recursively up to depth of `max_level`.
+
+    Args:
+        schema_node: The array schema node to flatten.
+        parent_key: The parent's key, provided as a list of node names.
+        separator: The string to use when concatenating key names.
+        level: The current recursion level (zero-based).
+        max_level: The max recursion level (zero-based, exclusive).
+
+    Returns:
+        A flattened version of the provided array node.
+    """
+    if parent_keys is None:
+        parent_keys = []
+
+    items: list[tuple[str, dict]] = []
+    if "properties" in schema_node:
+        expander = "properties"
+    elif "items" in schema_node:
+        expander = "items"
+    else:
+        return {}
+
+    for k, v in schema_node[expander].items():
+        new_key = flatten_key(k, parent_keys, separator)
+        if "type" in v.keys():
+            if "object" in v["type"] and "properties" in v and level < max_level:
+                items.extend(
+                    _flatten_array_schema(
+                        v,
+                        parent_keys + [k],
+                        separator=separator,
+                        level=level + 1,
+                        max_level=max_level,
+                    ).items()
+                )
+            elif "array" in v["type"] and "items" in v and level < max_level:
+                if "object" in v["items"]["type"] and "properties" in v["items"] and level < max_level:
+                    items.extend(
+                        _flatten_array_schema(
+                            v["items"],
+                            parent_keys + [k],
+                            separator=separator,
+                            level=level + 1,
+                            max_level=max_level,
+                        ).items()
+                    )
+                else:
+                    items.append((new_key, v["items"]))
+            else:
+                items.append((new_key, v))
+        else:
+            if len(v.values()) > 0:
+                if list(v.values())[0][0]["type"] == "string":
+                    list(v.values())[0][0]["type"] = ["null", "string"]
+                    items.append((new_key, list(v.values())[0][0]))
+                elif list(v.values())[0][0]["type"] == "array":
+                    list(v.values())[0][0]["type"] = ["null", "array"]
+                    items.append((new_key, list(v.values())[0][0]))
+                elif list(v.values())[0][0]["type"] == "object":
+                    list(v.values())[0][0]["type"] = ["null", "object"]
+                    items.append((new_key, list(v.values())[0][0]))
+
+    # Sort and check for duplicates
+    def _key_func(item):
+        return item[0]  # first item is tuple is the key name.
+
+    sorted_items = sorted(items, key=_key_func)
+    for k, g in itertools.groupby(sorted_items, key=_key_func):
+        if len(list(g)) > 1:
+            raise ValueError(f"Duplicate column name produced in schema: {k}")
+
+    # Return the (unsorted) result as a dict.
+    return dict(items)
 
 def flatten_schema(
     schema: dict,
@@ -269,6 +363,90 @@ def _flatten_schema(
             raise ValueError(f"Duplicate column name produced in schema: {k}")
 
     # Return the (unsorted) result as a dict.
+    return dict(items)
+
+def flatten_array_record(
+    record: dict,
+    flattened_schema: dict,
+    max_level: int,
+    stream_alias: str,
+    separator: str = "__",
+) -> dict:
+    """Flatten an array record up to max_level.
+
+    Args:
+        record: The array record to flatten.
+        flattened_schema: The already flattened schema.
+        separator: The string used to separate concatenated key names. Defaults to "__".
+        max_level: The maximum depth of keys to flatten recursively.
+
+    Returns:
+        A flattened version of the array record.
+    """
+    resultant_array_record = []
+    for rec in record[stream_alias]:
+        single_record = deepcopy(record)
+        single_record[stream_alias] = rec
+        resultant_array_record.append(_flatten_array_record(
+            record_node=single_record,
+            flattened_schema=flattened_schema,
+            separator=separator,
+            max_level=max_level,
+        ))
+    return resultant_array_record
+
+
+def _flatten_array_record(
+    record_node: MutableMapping[Any, Any],
+    flattened_schema: dict | None = None,
+    parent_key: list[str] | None = None,
+    separator: str = "__",
+    level: int = 0,
+    max_level: int = 0,
+) -> dict:
+    """This recursive function flattens the array record node.
+
+    The current invocation is expected to be at `level` and will continue recursively
+    until the provided `max_level` is reached.
+
+    Args:
+        record_node: The array record node to flatten.
+        flattened_schema: The already flattened full schema for the record.
+        parent_key: The parent's key, provided as a list of node names.
+        separator: The string to use when concatenating key names.
+        level: The current recursion level (zero-based).
+        max_level: The max recursion level (zero-based, exclusive).
+
+    Returns:
+        A flattened version of the provided array node.
+    """
+    if parent_key is None:
+        parent_key = []
+
+    items: list[tuple[str, Any]] = []
+    for k, v in record_node.items():
+        new_key = flatten_key(k, parent_key, separator)
+        if isinstance(v, collections.abc.MutableMapping) and level < max_level:
+            items.extend(
+                _flatten_array_record(
+                    v,
+                    flattened_schema,
+                    parent_key + [k],
+                    separator=separator,
+                    level=level + 1,
+                    max_level=max_level,
+                ).items()
+            )
+        else:
+            items.append(
+                (
+                    new_key,
+                    json.dumps(v)
+                    if _should_jsondump_value(k, v, flattened_schema)
+                    else v,
+                )
+            )
+
     return dict(items)
 
 

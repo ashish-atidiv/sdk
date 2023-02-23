@@ -21,6 +21,8 @@ from singer_sdk.helpers._flattening import (
     FlatteningOptions,
     flatten_record,
     flatten_schema,
+    flatten_array_record,
+    flatten_array_schema,
     get_flattening_options,
 )
 from singer_sdk.typing import (
@@ -102,7 +104,7 @@ class StreamMap(metaclass=abc.ABCMeta):
             and self.flattening_options.max_level > 0
         )
 
-    def flatten_record(self, record: dict) -> dict:
+    def flatten_record(self, record: dict, map_config: dict = None) -> dict:
         """If flattening is enabled, flatten a record and return the result.
 
         If flattening is disabled, the original record will be returned.
@@ -115,6 +117,16 @@ class StreamMap(metaclass=abc.ABCMeta):
         """
         if not self.flattening_options or not self.flattening_enabled:
             return record
+        
+        if map_config:
+            if self.stream_alias in map_config['flatten_arrays']:
+                return flatten_array_record(
+                    record,
+                    flattened_schema=self.transformed_schema,
+                    max_level=self.flattening_options.max_level,
+                    separator=self.flattening_options.separator,
+                    stream_alias=self.stream_alias,
+                )
 
         return flatten_record(
             record,
@@ -123,7 +135,7 @@ class StreamMap(metaclass=abc.ABCMeta):
             separator=self.flattening_options.separator,
         )
 
-    def flatten_schema(self, raw_schema: dict) -> dict:
+    def flatten_schema(self, raw_schema: dict, map_config: dict = None) -> dict:
         """Flatten the provided schema.
 
         Args:
@@ -134,6 +146,14 @@ class StreamMap(metaclass=abc.ABCMeta):
         """
         if not self.flattening_options or not self.flattening_enabled:
             return raw_schema
+        
+        if map_config:
+            if self.stream_alias in map_config['flatten_arrays']:
+                return flatten_array_schema(
+                    raw_schema,
+                    separator=self.flattening_options.separator,
+                    max_level=self.flattening_options.max_level,
+                )
 
         return flatten_schema(
             raw_schema,
@@ -156,7 +176,7 @@ class StreamMap(metaclass=abc.ABCMeta):
         Returns:
             A new dictionary representing a transformed record.
         """
-        return self.flatten_record(record)
+        return self.flatten_record(record, map_config=self.map_config)
 
     @abc.abstractmethod
     def get_filter_result(self, record: dict) -> bool:
@@ -419,7 +439,7 @@ class CustomStreamMap(StreamMap):
 
         # Transform the schema as needed
 
-        transformed_schema = copy.copy(self.raw_schema)
+        transformed_schema = copy.deepcopy(self.raw_schema)
         if not include_by_default:
             # Start with only the defined (or transformed) key properties
             transformed_schema = PropertiesList().to_dict()
@@ -470,7 +490,7 @@ class CustomStreamMap(StreamMap):
                 )
 
         if self.flattening_enabled:
-            transformed_schema = self.flatten_schema(transformed_schema)
+            transformed_schema = self.flatten_schema(transformed_schema, map_config=self.map_config)
 
         # Declare function variables
 
