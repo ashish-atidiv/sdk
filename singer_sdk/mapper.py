@@ -669,6 +669,7 @@ class PluginMapper:
         for stream_map_key, stream_def in self.stream_maps_dict.items():
             stream_alias: str = stream_map_key
             source_stream: str = stream_map_key
+            source_mapper_present: bool = False
             if isinstance(stream_def, str) and stream_def != NULL_STRING:
                 if stream_name == stream_map_key:
                     # TODO: Add any expected cases for str expressions (currently none)
@@ -699,9 +700,12 @@ class PluginMapper:
 
             if MAPPER_SOURCE_OPTION in stream_def:
                 source_stream = stream_def.pop(MAPPER_SOURCE_OPTION)
+                source_mapper_present = True
 
             if source_stream != stream_name:
                 # Not a match
+                if source_mapper_present:
+                    stream_def[MAPPER_SOURCE_OPTION] = source_stream                
                 continue
 
             if MAPPER_ALIAS_OPTION in stream_def:
