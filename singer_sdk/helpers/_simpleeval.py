@@ -499,7 +499,7 @@ class SimpleEval(object):  # pylint: disable=too-few-public-methods
             # (the compiler rejects it, so you can't even
             # pass that to ast.parse)
             if hasattr(self.names, "__getitem__"):
-                return self.names[node.id]
+                return self.names.get(node.id, None)
             elif callable(self.names):
                 return self.names(node)
             else:
